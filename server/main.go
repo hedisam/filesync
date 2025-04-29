@@ -76,6 +76,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	restapi.RegisterFunc(logger, mux, http.MethodDelete, "/v1/files/{key}", fileServer.DeleteFile)
+	restapi.RegisterFunc(logger, mux, http.MethodGet, "/v1/snapshot", fileServer.Snapshot)
 	mux.HandleFunc("PUT /v1/files/upload", uploadServer.UploadFile)
 
 	shutdown := mustInitTracer(logger, appName)

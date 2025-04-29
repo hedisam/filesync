@@ -37,7 +37,6 @@ type URLData struct {
 	MTime          int64
 	Expiry         int64
 	AccessKeyID    string
-	Signature      string
 }
 
 func Generate(data URLData, baseURL, secretKey string) (string, error) {
@@ -99,7 +98,7 @@ func Validate(values url.Values, secretKey string) (URLData, error) {
 		MTime:          mtime,
 		Expiry:         exp,
 		AccessKeyID:    values.Get(AccessKeyID),
-		Signature:      hex.EncodeToString(expectedSigBytes),
+		//Signature:      hex.EncodeToString(expectedSigBytes),
 	}, nil
 }
 

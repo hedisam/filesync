@@ -3,6 +3,8 @@ package chans
 import (
 	"context"
 	"iter"
+	"slices"
+	"sync"
 )
 
 // SendOrDone attempts to send the specified message of type T to the given channel.
@@ -45,4 +47,31 @@ func ReceiveOrDoneSeq[T any](ctx context.Context, ch <-chan T) iter.Seq[T] {
 			}
 		}
 	}
+}
+
+// FanIn reads from multiple input channels of type T and multiplexes their values
+// into a single returned channel. It uses the provided context for cancellation.
+// The function will close the returned channel when all input channels are closed
+// or when the context is cancelled.
+func FanIn[T any](ctx context.Context, channels ...<-chan T) <-chan T {
+	wg := &sync.WaitGroup{}
+	out := make(chan T)
+
+	for ch := range slices.Values(channels) {
+		wg.Add(1)
+		go func(ch <-chan T) {
+			defer wg.Done()
+
+			for data := range ReceiveOrDoneSeq(ctx, ch) {
+				SendOrDone(ctx, out, data)
+			}
+		}(ch)
+	}
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+
+	return out
 }

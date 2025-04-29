@@ -77,7 +77,7 @@ func (s *UploadServer) UploadFile(w http.ResponseWriter, r *http.Request) {
 
 	logger = logger.WithField("key", urlData.ObjectKey)
 
-	if r.ContentLength != urlData.Size {
+	if r.ContentLength != -1 && r.ContentLength != urlData.Size {
 		// fail early if Content-Length doesn't match the size value in the
 		// presigned url; no point in wasting resources on an invalid request
 		logger.WithFields(logrus.Fields{
@@ -85,6 +85,7 @@ func (s *UploadServer) UploadFile(w http.ResponseWriter, r *http.Request) {
 			"size":           urlData.Size,
 		}).Warn("Mismatched Content-Length with presigned url size while uploading file")
 		http.Error(w, "mismatched Content-Length and size", http.StatusBadRequest)
+		return
 	}
 
 	objectID := mustUUIDV7()
@@ -106,6 +107,7 @@ func (s *UploadServer) UploadFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logger.WithError(err).Warn("Failed to save file to storage")
 		http.Error(w, fmt.Sprintf("failed to save file to storage: %q", err.Error()), http.StatusInternalServerError)
+		return
 	}
 
 	if urlData.SHA256Checksum != checksum {
@@ -126,6 +128,7 @@ func (s *UploadServer) UploadFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		logger.WithError(err).Error("Failed to mark object metadata as completed when uploading file")
 		http.Error(w, fmt.Sprintf("failed to mark object metadata as completed when uploading file: %q", err.Error()), http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusCreated)

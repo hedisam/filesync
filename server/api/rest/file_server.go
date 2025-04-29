@@ -7,10 +7,13 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/hedisam/filesync/server/internal/store"
 )
 
 type FileMetadataStore interface {
 	Delete(ctx context.Context, key string) error
+	Snapshot(context.Context) (map[string]store.ObjectMetadata, error)
 }
 
 // FileServer is an implementation of our Restful server.
@@ -26,8 +29,26 @@ func NewFilesServer(logger *logrus.Logger, fileMetadataStore FileMetadataStore) 
 	}
 }
 
-func (s *FileServer) Snapshot(context.Context, any) (resp any, err error) {
-	return nil, NewErrf(http.StatusNotImplemented, "Not Implemented")
+func (s *FileServer) Snapshot(ctx context.Context, _ *GetSnapshotRequest) (*GetSnapshotResponse, error) {
+	logger := s.logger.WithContext(ctx)
+	snapshot, err := s.fileMetadataStore.Snapshot(ctx)
+	if err != nil {
+		logger.Error("Failed to get metadata snapshot")
+		return nil, NewErrf(http.StatusInternalServerError, err.Error())
+	}
+
+	keyToObject := make(map[string]*Metadata, len(snapshot))
+	for k, md := range snapshot {
+		keyToObject[k] = &Metadata{
+			Key:            k,
+			Size:           md.Size,
+			SHA256Checksum: md.SHA256Checksum,
+		}
+	}
+
+	return &GetSnapshotResponse{
+		KeyToMetadata: keyToObject,
+	}, nil
 }
 
 func (s *FileServer) DeleteFile(ctx context.Context, req *DeleteFileRequest) (*DeleteFileResponse, error) {
@@ -48,6 +69,18 @@ func (s *FileServer) DeleteFile(ctx context.Context, req *DeleteFileRequest) (*D
 	logger.Debug("Object marked as deleted")
 
 	return &DeleteFileResponse{}, nil
+}
+
+type Metadata struct {
+	Key            string `json:"key"`
+	Size           int64  `json:"size"`
+	SHA256Checksum string `json:"sha256_checksum"`
+}
+
+type GetSnapshotRequest struct{}
+
+type GetSnapshotResponse struct {
+	KeyToMetadata map[string]*Metadata `json:"key_to_metadata"`
 }
 
 type DeleteFileRequest struct {

@@ -38,6 +38,17 @@ func NewMetadataStore(e Emitter) *MetadataStore {
 	}
 }
 
+func (s *MetadataStore) Snapshot(context.Context) (map[string]store.ObjectMetadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	snapshot := make(map[string]store.ObjectMetadata, len(s.keyToObjectMetadata))
+	for k, v := range s.keyToObjectMetadata {
+		snapshot[k] = *v
+	}
+	return snapshot, nil
+}
+
 // Create creates a file metadata record in the database. It will be marked as completed when the upload is done.
 func (s *MetadataStore) Create(_ context.Context, md *store.ObjectMetadata) error {
 	s.mu.Lock()
