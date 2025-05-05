@@ -6,6 +6,8 @@ package mocks
 import (
 	"context"
 	"sync"
+
+	"github.com/hedisam/filesync/server/internal/store"
 )
 
 // FileMetadataStoreMock is a mock implementation of rest.FileMetadataStore.
@@ -17,6 +19,9 @@ import (
 //			DeleteFunc: func(ctx context.Context, key string) error {
 //				panic("mock out the Delete method")
 //			},
+//			SnapshotFunc: func(contextMoqParam context.Context) (map[string]store.ObjectMetadata, error) {
+//				panic("mock out the Snapshot method")
+//			},
 //		}
 //
 //		// use mockedFileMetadataStore in code that requires rest.FileMetadataStore
@@ -27,6 +32,9 @@ type FileMetadataStoreMock struct {
 	// DeleteFunc mocks the Delete method.
 	DeleteFunc func(ctx context.Context, key string) error
 
+	// SnapshotFunc mocks the Snapshot method.
+	SnapshotFunc func(contextMoqParam context.Context) (map[string]store.ObjectMetadata, error)
+
 	// calls tracks calls to the methods.
 	calls struct {
 		// Delete holds details about calls to the Delete method.
@@ -36,8 +44,14 @@ type FileMetadataStoreMock struct {
 			// Key is the key argument value.
 			Key string
 		}
+		// Snapshot holds details about calls to the Snapshot method.
+		Snapshot []struct {
+			// ContextMoqParam is the contextMoqParam argument value.
+			ContextMoqParam context.Context
+		}
 	}
-	lockDelete sync.RWMutex
+	lockDelete   sync.RWMutex
+	lockSnapshot sync.RWMutex
 }
 
 // Delete calls DeleteFunc.
@@ -73,5 +87,37 @@ func (mock *FileMetadataStoreMock) DeleteCalls() []struct {
 	mock.lockDelete.RLock()
 	calls = mock.calls.Delete
 	mock.lockDelete.RUnlock()
+	return calls
+}
+
+// Snapshot calls SnapshotFunc.
+func (mock *FileMetadataStoreMock) Snapshot(contextMoqParam context.Context) (map[string]store.ObjectMetadata, error) {
+	if mock.SnapshotFunc == nil {
+		panic("FileMetadataStoreMock.SnapshotFunc: method is nil but FileMetadataStore.Snapshot was just called")
+	}
+	callInfo := struct {
+		ContextMoqParam context.Context
+	}{
+		ContextMoqParam: contextMoqParam,
+	}
+	mock.lockSnapshot.Lock()
+	mock.calls.Snapshot = append(mock.calls.Snapshot, callInfo)
+	mock.lockSnapshot.Unlock()
+	return mock.SnapshotFunc(contextMoqParam)
+}
+
+// SnapshotCalls gets all the calls that were made to Snapshot.
+// Check the length with:
+//
+//	len(mockedFileMetadataStore.SnapshotCalls())
+func (mock *FileMetadataStoreMock) SnapshotCalls() []struct {
+	ContextMoqParam context.Context
+} {
+	var calls []struct {
+		ContextMoqParam context.Context
+	}
+	mock.lockSnapshot.RLock()
+	calls = mock.calls.Snapshot
+	mock.lockSnapshot.RUnlock()
 	return calls
 }

@@ -33,8 +33,8 @@ func (s *FileServer) Snapshot(ctx context.Context, _ *GetSnapshotRequest) (*GetS
 	logger := s.logger.WithContext(ctx)
 	snapshot, err := s.fileMetadataStore.Snapshot(ctx)
 	if err != nil {
-		logger.Error("Failed to get metadata snapshot")
-		return nil, NewErrf(http.StatusInternalServerError, err.Error())
+		logger.WithError(err).Error("Failed to get metadata snapshot")
+		return nil, NewErrf(http.StatusInternalServerError, "get snapshot from store: %v", err)
 	}
 
 	keyToObject := make(map[string]*Metadata, len(snapshot))

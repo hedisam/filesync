@@ -16,9 +16,6 @@ import (
 //			AddFunc: func(dirPath string) error {
 //				panic("mock out the Add method")
 //			},
-//			IncStageNumFunc: func()  {
-//				panic("mock out the IncStageNum method")
-//			},
 //		}
 //
 //		// use mockedWatcher in code that requires filesystem.Watcher
@@ -29,9 +26,6 @@ type WatcherMock struct {
 	// AddFunc mocks the Add method.
 	AddFunc func(dirPath string) error
 
-	// IncStageNumFunc mocks the IncStageNum method.
-	IncStageNumFunc func()
-
 	// calls tracks calls to the methods.
 	calls struct {
 		// Add holds details about calls to the Add method.
@@ -39,12 +33,8 @@ type WatcherMock struct {
 			// DirPath is the dirPath argument value.
 			DirPath string
 		}
-		// IncStageNum holds details about calls to the IncStageNum method.
-		IncStageNum []struct {
-		}
 	}
-	lockAdd         sync.RWMutex
-	lockIncStageNum sync.RWMutex
+	lockAdd sync.RWMutex
 }
 
 // Add calls AddFunc.
@@ -76,32 +66,5 @@ func (mock *WatcherMock) AddCalls() []struct {
 	mock.lockAdd.RLock()
 	calls = mock.calls.Add
 	mock.lockAdd.RUnlock()
-	return calls
-}
-
-// IncStageNum calls IncStageNumFunc.
-func (mock *WatcherMock) IncStageNum() {
-	if mock.IncStageNumFunc == nil {
-		panic("WatcherMock.IncStageNumFunc: method is nil but Watcher.IncStageNum was just called")
-	}
-	callInfo := struct {
-	}{}
-	mock.lockIncStageNum.Lock()
-	mock.calls.IncStageNum = append(mock.calls.IncStageNum, callInfo)
-	mock.lockIncStageNum.Unlock()
-	mock.IncStageNumFunc()
-}
-
-// IncStageNumCalls gets all the calls that were made to IncStageNum.
-// Check the length with:
-//
-//	len(mockedWatcher.IncStageNumCalls())
-func (mock *WatcherMock) IncStageNumCalls() []struct {
-} {
-	var calls []struct {
-	}
-	mock.lockIncStageNum.RLock()
-	calls = mock.calls.IncStageNum
-	mock.lockIncStageNum.RUnlock()
 	return calls
 }

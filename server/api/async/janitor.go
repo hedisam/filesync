@@ -9,8 +9,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
 
-	"github.com/hedisam/filesync/lib/chans"
 	"github.com/hedisam/filesync/server/internal/store"
+	"github.com/hedisam/pipeline/chans"
 )
 
 type FileStorage interface {
@@ -55,7 +55,7 @@ func (j *Janitor) cleanup(ctx context.Context, md *store.ObjectMetadata) {
 		backoff.WithRandomizationFactor(0.2),
 	)
 	err := backoff.Retry(func() error {
-		err := j.storage.DeleteObject(ctx, md.Key)
+		err := j.storage.DeleteObject(ctx, md.ObjectID)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				logger.WithError(err).Error("Failed to cleanup object due to context cancellation; will be retried later")
