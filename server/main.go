@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -31,26 +32,25 @@ const (
 type Options struct {
 	DestinationDir string
 	ServerAddr     string
-	Quite          bool
+	Verbose        bool
 }
 
 func main() {
 	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
 	logger.AddHook(&interceptors.TraceHook{})
 
 	var opts Options
 	flag.StringVar(&opts.DestinationDir, "dest-dir", "", "Destination directory to store file objects (required)")
 	flag.StringVar(&opts.ServerAddr, "server-addr", "localhost:8080", "FileServer address to listen on")
-	flag.BoolVar(&opts.Quite, "quite", false, "Quite output")
+	flag.BoolVar(&opts.Verbose, "v", false, "Verbose output")
 	flag.Parse()
 
 	if opts.DestinationDir == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
-	if opts.Quite {
-		logger.SetLevel(logrus.InfoLevel)
+	if opts.Verbose {
+		logger.SetLevel(logrus.DebugLevel)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -93,11 +93,7 @@ func main() {
 	// Expose the registered metrics via HTTP
 	mux.Handle("/metrics", promhttp.Handler())
 
-	logger.WithField("addr", opts.ServerAddr).Info("Starting server")
-	err = http.ListenAndServe(opts.ServerAddr, handler)
-	if err != nil {
-		logger.WithError(err).Fatal("Server failed with error")
-	}
+	mustListenAndServe(ctx, logger, opts.ServerAddr, handler)
 }
 
 func generateAndPrintAccessKey(authService *auth.Auth) {
@@ -119,4 +115,30 @@ func mustInitTracer(logger *logrus.Logger, appName string) func(context.Context)
 	}
 
 	return tp.Shutdown
+}
+
+func mustListenAndServe(ctx context.Context, logger *logrus.Logger, addr string, handler http.Handler) {
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
+	go func() {
+		logger.WithField("addr", addr).Info("Serving server...")
+		err := srv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.WithError(err).Fatal("Server failed with error")
+		}
+	}()
+
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	logger.Info("Shutting down server...")
+	err := srv.Shutdown(shutdownCtx)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		logger.WithError(err).Error("Failed to shutdown server gracefully")
+	}
 }

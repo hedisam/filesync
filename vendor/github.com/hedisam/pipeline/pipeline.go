@@ -23,8 +23,9 @@ type Sink func(ctx context.Context, out any) error
 
 // Pipeline is the pipeline orchestrator.
 type Pipeline struct {
-	sources []Source
-	sink    Sink
+	sources            []Source
+	sequentialSourcing bool
+	sink               Sink
 }
 
 // Option defines a function that can be used to config Pipeline with more options
@@ -36,6 +37,14 @@ func WithSources(sources ...Source) Option {
 		if len(sources) > 0 {
 			p.sources = append(p.sources, sources...)
 		}
+	}
+}
+
+// WithSequentialSourcing is used to make the pipeline process the provided sources (if more than one) sequentially.
+// It will drain the first source then moves on to the next one and so on until the last source is drained.
+func WithSequentialSourcing() Option {
+	return func(p *Pipeline) {
+		p.sequentialSourcing = true
 	}
 }
 
@@ -60,6 +69,37 @@ func (p *Pipeline) Run(ctx context.Context, stages ...stage.Runner) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	errorChans := p.run(ctx, stages...)
+	err, _ := chans.ReceiveOrDone(ctx, chans.FanIn(ctx, errorChans...))
+	return err
+}
+
+// RunAsync is like Run but doesn't block, instead, it returns and error channel.
+func (p *Pipeline) RunAsync(ctx context.Context, stages ...stage.Runner) <-chan error {
+	ctx, cancel := context.WithCancel(ctx)
+	errCh := make(chan error)
+
+	go func() {
+		defer cancel()
+		defer close(errCh)
+
+		errorChans := p.run(ctx, stages...)
+		err, ok := chans.ReceiveOrDone(ctx, chans.FanIn(ctx, errorChans...))
+		if !ok {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case errCh <- err:
+		}
+	}()
+
+	return errCh
+}
+
+func (p *Pipeline) run(ctx context.Context, stages ...stage.Runner) []<-chan error {
 	inputChans := make([]<-chan any, len(stages)+1)      // +1 for the sink input
 	errorChans := make([]<-chan error, 0, len(stages)+2) // +2 for source and sink
 
@@ -76,8 +116,7 @@ func (p *Pipeline) Run(ctx context.Context, stages ...stage.Runner) error {
 	sinkErrCh := p.startSink(ctx, inputChans[len(inputChans)-1])
 	errorChans = append(errorChans, sinkErrCh)
 
-	err, _ := chans.ReceiveOrDone(ctx, chans.FanIn(ctx, errorChans...))
-	return err
+	return errorChans
 }
 
 func (p *Pipeline) startSources(ctx context.Context) (<-chan any, <-chan error) {
@@ -85,26 +124,45 @@ func (p *Pipeline) startSources(ctx context.Context) (<-chan any, <-chan error) 
 	outCh := make(chan any)
 	errCh := make(chan error)
 
-	for i, src := range p.sources {
+	consumeSource := func(ctx context.Context, src Source) error {
+		for {
+			payload, err := src.Next(ctx)
+			if err != nil {
+				return fmt.Errorf("get next payload from source: %w", err)
+			}
+
+			ok := chans.SendOrDone(ctx, outCh, payload)
+			if !ok {
+				return nil
+			}
+		}
+	}
+
+	if p.sequentialSourcing {
 		sourcesWG.Add(1)
 		go func() {
 			defer sourcesWG.Done()
 
-			for {
-				payload, err := src.Next(ctx)
-				if err != nil {
-					if !errors.Is(err, io.EOF) {
-						_ = chans.SendOrDone(ctx, errCh, fmt.Errorf("next payload from source %d: %w", i, err))
-					}
-					return
-				}
-
-				ok := chans.SendOrDone(ctx, outCh, payload)
-				if !ok {
+			for i, src := range p.sources {
+				err := consumeSource(ctx, src)
+				if err != nil && !errors.Is(err, io.EOF) {
+					_ = chans.SendOrDone(ctx, errCh, fmt.Errorf("could not consume sequential source '%d': %w", i, err))
 					return
 				}
 			}
 		}()
+	} else {
+		for i, src := range p.sources {
+			sourcesWG.Add(1)
+			go func() {
+				defer sourcesWG.Done()
+
+				err := consumeSource(ctx, src)
+				if err != nil && !errors.Is(err, io.EOF) {
+					_ = chans.SendOrDone(ctx, errCh, fmt.Errorf("could not consume source '%d': %w", i, err))
+				}
+			}()
+		}
 	}
 
 	go func() {

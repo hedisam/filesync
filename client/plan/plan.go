@@ -10,162 +10,98 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	restapi "github.com/hedisam/filesync/client/api/rest"
-	"github.com/hedisam/filesync/client/indexer"
+	"github.com/hedisam/filesync/client/index"
 	"github.com/hedisam/filesync/lib/psurls"
-	"github.com/hedisam/pipeline"
-	"github.com/hedisam/pipeline/stage"
 )
 
-const ()
-
-type Credentials struct {
-	AccessKeyID string
-	SecretKey   string
-}
-
-type Indexer interface {
-	Snapshot() map[string]indexer.FileMetadata
-}
-
 type RestClient interface {
-	Snapshot(ctx context.Context) (map[string]restapi.File, error)
-	Delete(ctx context.Context, fileKey string) error
-	Upload(ctx context.Context, r io.Reader, url string, size int64) error
+	UploadURL() string
+	Upload(ctx context.Context, reader io.Reader, presignedURL string, size int64) error
+	Delete(ctx context.Context, key string) error
+}
+
+type PlanRequest interface {
+	Apply(ctx context.Context, client RestClient, opts ...Option) error
+	String() string
 }
 
 type Plan struct {
-	// uploads are PUT operations, they will replace existing files on the server.
-	ToUpload []*indexer.FileMetadata
-	ToDelete []string
+	Requests []PlanRequest
 }
 
-func Generate(ctx context.Context, restClient RestClient, idx Indexer) (*Plan, error) {
-	// we should retrieve the snapshot in a background job while we are building the index
-	// ideally, the snapshot will be retrieved incrementally.
-	serverSnapshot, err := restClient.Snapshot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("could not retrieve server snapshot: %w", err)
-	}
-
-	localSnapshot := idx.Snapshot()
-
-	var toUpload []*indexer.FileMetadata
-	for fileName, localFile := range localSnapshot {
-		remoteFile, ok := serverSnapshot[fileName]
-		if !ok || localFile.SHA256Checksum != remoteFile.SHA256Checksum {
-			fmt.Printf("to upload: %+v\n", localFile)
-			toUpload = append(toUpload, &localFile)
-		}
-	}
-	var toDelete []string
-	for fileName := range serverSnapshot {
-		_, ok := localSnapshot[fileName]
-		if !ok {
-			toDelete = append(toDelete, fileName)
-		}
-	}
-
-	return &Plan{
-		ToUpload: toUpload,
-		ToDelete: toDelete,
-	}, nil
+type applyConfig struct {
+	accessKeyID string
+	secretKey   string
 }
 
-func Apply(ctx context.Context, logger *logrus.Logger, uploadBaseURL string, restClient RestClient, plan *Plan, workersNum uint, creds Credentials) error {
-	var data []any
-	uploadKeys := make([]string, 0, len(plan.ToUpload))
-	for upload := range slices.Values(plan.ToUpload) {
-		data = append(data, upload)
-		uploadKeys = append(uploadKeys, upload.Path)
-	}
-	for deletion := range slices.Values(plan.ToDelete) {
-		data = append(data, deletion)
-	}
-	logger.WithFields(logrus.Fields{
-		"to_upload": uploadKeys,
-		"to_delete": plan.ToDelete,
-	}).Debug("Applying plan")
+type Option func(*applyConfig)
 
-	ws := &workerStage{
-		logger:        logger,
-		client:        restClient,
-		creds:         creds,
-		uploadBaseURL: uploadBaseURL,
-	}
-
-	workersNum = min(workersNum, uint(len(data)))
-	source := pipeline.SeqSource(slices.Values(data))
-	p := pipeline.NewPipeline(source, ws.sink)
-	err := p.Run(ctx, stage.WorkerPoolRunner(workersNum, ws.worker))
-	if err != nil {
-		return fmt.Errorf("run pipeline: %w", err)
-	}
-
-	logger.Info("Successfully applied plan")
-
-	return nil
-}
-
-type workerStage struct {
-	logger        *logrus.Logger
-	client        RestClient
-	creds         Credentials
-	uploadBaseURL string
-}
-
-func (s *workerStage) worker(ctx context.Context, payload any) (out any, drop bool, err error) {
-	switch val := payload.(type) {
-	case *indexer.FileMetadata:
-		err = s.upload(ctx, val)
-		if err != nil {
-			return nil, false, fmt.Errorf("upload file %q: %w", val.Path, err)
-		}
-		return nil, false, nil
-	case string:
-		err = s.delete(ctx, val)
-		if err != nil {
-			return nil, false, fmt.Errorf("delete file %q: %w", val, err)
-		}
-		return nil, false, nil
-	default:
-		return nil, false, fmt.Errorf("unknown payload type: %T", payload)
+func ApplyWithCreds(accessKeyID, secretKey string) Option {
+	return func(cfg *applyConfig) {
+		cfg.accessKeyID = accessKeyID
+		cfg.secretKey = secretKey
 	}
 }
 
-func (s *workerStage) upload(ctx context.Context, md *indexer.FileMetadata) error {
+type uploadRequest struct {
+	logger       *logrus.Logger
+	fileMetadata *index.FileMetadata
+}
+
+func (pr *uploadRequest) Apply(ctx context.Context, client RestClient, opts ...Option) error {
+	cfg := &applyConfig{}
+	for opt := range slices.Values(opts) {
+		opt(cfg)
+	}
+
+	md := pr.fileMetadata
 	f, err := os.Open(md.Path)
 	if err != nil {
 		// must've been deleted; ignore
-		s.logger.WithError(err).WithField("path", md.Path).Warn("Failed to open file for upload, ignoring")
+		pr.logger.WithError(err).WithField("path", md.Path).Warn("Failed to open file for upload, ignoring")
 		return nil
 	}
 	defer f.Close()
 
-	// todo: add an idempotency key
 	urlData := psurls.URLData{
 		ObjectKey:      md.Path,
-		SHA256Checksum: md.SHA256Checksum,
+		SHA256Checksum: md.SHA256,
 		Size:           md.Size,
 		MTime:          md.MTime,
 		Expiry:         time.Now().UTC().Add(10 * time.Minute).Unix(),
-		AccessKeyID:    s.creds.AccessKeyID,
+		AccessKeyID:    cfg.accessKeyID,
 	}
 
-	url, err := psurls.Generate(urlData, s.uploadBaseURL, s.creds.SecretKey)
+	url, err := psurls.Generate(urlData, client.UploadURL(), cfg.secretKey)
 	if err != nil {
 		return fmt.Errorf("generate presigned url for %q: %w", md.Path, err)
 	}
 
-	return s.client.Upload(ctx, f, url, md.Size)
-}
+	err = client.Upload(ctx, f, url, md.Size)
+	if err != nil {
+		return fmt.Errorf("upload via presigned url for %q: %w", md.Path, err)
+	}
 
-func (s *workerStage) delete(ctx context.Context, key string) error {
-	// todo: would be better to have a bulk deletion method
-	return s.client.Delete(ctx, key)
-}
-
-// sink is a no-op sink.
-func (s *workerStage) sink(ctx context.Context, payload any) error {
 	return nil
+}
+
+func (pr *uploadRequest) String() string {
+	return fmt.Sprintf("Planned request to upload %q", pr.fileMetadata.Path)
+}
+
+type deleteRequest struct {
+	filePath string
+}
+
+func (pr *deleteRequest) Apply(ctx context.Context, client RestClient, _ ...Option) error {
+	err := client.Delete(ctx, pr.filePath)
+	if err != nil {
+		return fmt.Errorf("delete via rest client for file %q: %w", pr.filePath, err)
+	}
+
+	return nil
+}
+
+func (pr *deleteRequest) String() string {
+	return fmt.Sprintf("Planned request to delete %q", pr.filePath)
 }

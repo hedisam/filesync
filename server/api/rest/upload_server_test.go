@@ -33,7 +33,7 @@ func TestUploadFile(t *testing.T) {
 			wantBodySubstr: "invalid access key id",
 		},
 		"invalid key": {
-			url:            "http://localhost/upload?access_key_id=foo",
+			url:            "http://localhost/upload?aki=foo",
 			authKeyID:      "foo",
 			authSecret:     "",
 			authOK:         false,

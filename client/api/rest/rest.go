@@ -27,17 +27,27 @@ type Client struct {
 	cli     *http.Client
 }
 
-func NewClient(logger *logrus.Logger, baseURL string) *Client {
+func NewClient(logger *logrus.Logger, baseURL string) (*Client, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse base url: %w", err)
+	}
+
 	return &Client{
 		logger:  logger,
-		baseURL: baseURL,
+		baseURL: u.String(),
 		cli: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-	}
+	}, nil
 }
 
-func (c *Client) Snapshot(ctx context.Context) (map[string]File, error) {
+func (c *Client) UploadURL() string {
+	result, _ := url.JoinPath(c.baseURL, "/v1/files/upload")
+	return result
+}
+
+func (c *Client) Snapshot(ctx context.Context) (map[string]*File, error) {
 	u, err := url.JoinPath(c.baseURL, "v1/snapshot")
 	if err != nil {
 		return nil, fmt.Errorf("create url: %w", err)
@@ -62,7 +72,7 @@ func (c *Client) Snapshot(ctx context.Context) (map[string]File, error) {
 	}
 
 	type Response struct {
-		KeyToMetadata map[string]File `json:"key_to_metadata"`
+		KeyToMetadata map[string]*File `json:"key_to_metadata"`
 	}
 
 	var response Response
@@ -74,8 +84,8 @@ func (c *Client) Snapshot(ctx context.Context) (map[string]File, error) {
 	return response.KeyToMetadata, nil
 }
 
-func (c *Client) Upload(ctx context.Context, r io.Reader, url string, size int64) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, r)
+func (c *Client) Upload(ctx context.Context, r io.Reader, presignedURL string, size int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presignedURL, r)
 	if err != nil {
 		return fmt.Errorf("could not create upload request: %w", err)
 	}
@@ -98,10 +108,11 @@ func (c *Client) Upload(ctx context.Context, r io.Reader, url string, size int64
 }
 
 func (c *Client) Delete(ctx context.Context, fileKey string) error {
-	u, err := url.JoinPath(c.baseURL, "v1/files", fileKey)
+	u, err := url.JoinPath(c.baseURL, "v1/files", url.PathEscape(fileKey))
 	if err != nil {
 		return fmt.Errorf("create url: %w", err)
 	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
 	if err != nil {
 		return fmt.Errorf("could not create delete request: %w", err)

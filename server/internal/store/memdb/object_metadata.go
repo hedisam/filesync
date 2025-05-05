@@ -106,16 +106,13 @@ func (s *MetadataStore) PutObjectCompleted(ctx context.Context, key, objectID st
 		return ErrNotFound
 	}
 
-	var object *store.ObjectMetadata
-	for obj := range slices.Values(inflightObjects) {
-		if obj.ObjectID == objectID {
-			object = obj
-			break
-		}
-	}
-	if object == nil {
+	i := slices.IndexFunc(inflightObjects, func(md *store.ObjectMetadata) bool {
+		return md.ObjectID == objectID
+	})
+	if i == -1 {
 		return fmt.Errorf("object not found in inflight uploads: %w", ErrNotFound)
 	}
+	object := inflightObjects[i]
 
 	existingObject, ok := s.keyToObjectMetadata[key]
 	if ok {
